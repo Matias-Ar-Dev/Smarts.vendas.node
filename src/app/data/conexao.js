@@ -1,19 +1,19 @@
+// src/conexao.js
 import mysql from 'mysql';
 import dotenv from 'dotenv';
 
-// Carrega as variáveis de ambiente do arquivo .env
-dotenv.config();
+dotenv.config(); // Isso precisa estar ANTES da criação da conexão
 
-// Cria a conexão usando as variáveis de ambiente
+console.log("DB_USER:", process.env.DB_USER); // Debug temporário
+
 const conexao = mysql.createConnection({
-  host:  'localhost',
-  port:  '3306',
-  user:  'matias',
-  password: 'matias2002',
-  database: 'celke'
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME
 });
 
-// Função para conectar ao banco e exibir mensagem de sucesso ou erro
 conexao.connect((err) => {
   if (err) {
     console.error('❌ Erro ao conectar ao banco de dados:', err.message);
