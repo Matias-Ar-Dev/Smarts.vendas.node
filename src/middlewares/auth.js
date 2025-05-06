@@ -1,5 +1,9 @@
-import jwt from "jsonwebtoken"
-const JWT_SECRET = 'sua-chave-secreta';
+import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
+
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
 
 export const authenticateJWT = (req, res, next) => {
     const token = req.headers['authorization'];
@@ -12,8 +16,7 @@ export const authenticateJWT = (req, res, next) => {
         if (err) {
             return res.status(403).json({ error: "Token inválido ou expirado" });
         }
-        
-        // Anexa o usuário ao objeto `req`
+
         req.user = user;
         next();
     });

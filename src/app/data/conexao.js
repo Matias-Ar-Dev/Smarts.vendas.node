@@ -1,25 +1,25 @@
 // src/conexao.js
-import mysql from 'mysql';
+import mysql from 'mysql2';
 import dotenv from 'dotenv';
 
-dotenv.config(); // Isso precisa estar ANTES da criação da conexão
+dotenv.config(); // Carrega variáveis de ambiente
 
-console.log("DB_USER:", process.env.DB_USER); // Debug temporário
-
+// Cria conexão com suporte a Promises
 const conexao = mysql.createConnection({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME
-});
+}).promise(); // <- Habilita Promises aqui
 
-conexao.connect((err) => {
-  if (err) {
-    console.error('❌ Erro ao conectar ao banco de dados:', err.message);
-  } else {
+// Teste de conexão
+conexao.connect()
+  .then(() => {
     console.log('✅ Conectado ao banco de dados com sucesso!');
-  }
-});
+  })
+  .catch((err) => {
+    console.error('❌ Erro ao conectar ao banco de dados:', err.message);
+  });
 
 export default conexao;
