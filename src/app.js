@@ -10,6 +10,9 @@ import path from 'path';
 import multer from 'multer';
 import fs from 'fs'
 import { handleCreateUser } from './app/controllers/userContro.js';
+import { loginUser } from './app/controllers/logincontro.js';
+import { handleDeleteUser } from './app/controllers/deleteuserContro.js';
+import { editUser } from './app/controllers/edituserContro.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -166,16 +169,37 @@ app.delete('/upload/:id_uploads', async (req, res) => {
     }
   });
 
-app.get('/uploads', async (req, res) => {
+  app.get('/uploads', async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 6;
+    const offset = (page - 1) * limit;
+  
     try {
-      const [rows] = await conexao.execute('SELECT * FROM uploads ORDER BY upload_date DESC');
-      res.json(rows);
+      // Conta total de uploads
+      const [countRows] = await conexao.execute("SELECT COUNT(*) AS total FROM uploads");
+      const total = countRows[0].total;
+  
+      // Busca paginada e ordenada
+      const [dataRows] = await conexao.execute(
+        "SELECT * FROM uploads ORDER BY upload_date DESC LIMIT ? OFFSET ?",
+        [limit, offset]
+      );
+  
+      const lastPage = Math.ceil(total / limit);
+  
+      res.status(200).json({
+        page,
+        perPage: limit,
+        total,
+        lastPage,
+        data: dataRows
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: 'Erro ao buscar arquivos' });
     }
   });
-
+  
   
 app.get('/download/:id_uploads', async (req, res) => {
     const { id_uploads } = req.params;
@@ -206,201 +230,65 @@ app.get('/download/:id_uploads', async (req, res) => {
     }
   });
   
-
-// No seu backend (controller ou rota de listagem de usuários)
-app.get('/count_users', async (req, res) => {
+  app.get('/count_users', async (req, res) => {
     const countQuery = "SELECT COUNT(*) AS total FROM users";
+
+    try {
+        // Consulta a quantidade total de usuários
+        const [results] = await conexao.execute(countQuery);
+        const totalUsers = results[0].total; // Total de usuários
+
+        // Retorna a resposta com a contagem
+        res.status(200).json({ totalUsers });
+    } catch (err) {
+        res.status(500).json({ error: 'Erro ao contar usuários', details: err.message });
+    }
+});
+  
+  app.get('/list_users', async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 6;
+    const offset = (page - 1) * limit;
   
     try {
-      const result = await new Promise((resolve, reject) => {
-        conexao.query(countQuery, (err, results) => {
-          if (err) reject(err);
-          else resolve(results[0].total); // A quantidade total de usuários
-        });
+      const [countRows] = await conexao.query("SELECT COUNT(*) AS total FROM users");
+      const total = countRows[0].total;
+  
+      const [dataRows] = await conexao.query("SELECT * FROM users LIMIT ? OFFSET ?", [limit, offset]);
+      const lastPage = Math.ceil(total / limit);
+  
+      res.status(200).json({
+        page,
+        perPage: limit,
+        total,
+        lastPage,
+        data: dataRows
       });
   
-      res.status(200).json({ totalUsers: result }); // Retorna a quantidade total de usuários
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
   
+app.post('/create_users', handleCreateUser)
 
-app.get('/list_users', async (req, res) => {
-    const page = parseInt(req.query.page) || 1;    // página atual (default = 1)
-    const limit = parseInt(req.query.limit) || 6; // quantos por página (default = 10)
-    const offset = (page - 1) * limit;             // quantos pular
-
-    // Contar total de registros primeiro
-    const countQuery = "SELECT COUNT(*) AS total FROM users";
-    const dataQuery = "SELECT * FROM users LIMIT ? OFFSET ?";
-
-    try {
-        const totalResult = await new Promise((resolve, reject) => {
-            conexao.query(countQuery, (err, result) => {
-                if (err) reject(err);
-                else resolve(result[0].total);
-            });
-        });
-
-        const data = await new Promise((resolve, reject) => {
-            conexao.query(dataQuery, [limit, offset], (err, results) => {
-                if (err) reject(err);
-                else resolve(results);
-            });
-        });
-
-        const lastPage = Math.ceil(totalResult / limit);
-
-        res.status(200).json({
-            page,
-            perPage: limit,
-            total: totalResult,
-            lastPage,
-            data
-        });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-app.post('/create_user', handleCreateUser)
-
-
-app.post('/create_users', async (req, res) => {
-    const { name_user, email_user, password_user, role_user = 'user' } = req.body;
-    try {
-        const hashedPassword = await bcrypt.hash(password_user, 10);
-        const sql = `
-            INSERT INTO users (name_user, email_user, password_user, role_user)
-            VALUES (?, ?, ?, ?)
-        `;
-        const result = await new Promise((resolve, reject) => {
-            conexao.query(sql, [name_user, email_user, hashedPassword, role_user], (err, results) => {
-                if (err) reject(err);
-                else resolve(results);
-            });
-        });
-        res.status(201).json({ message: "Usuário criado com sucesso", id_user: result.insertId });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.delete('/delete_user/:id_user', async (req, res) => {
-    try {
-        const id_user = Number(req.params.id_user);
-        const sql = `DELETE FROM users WHERE id_user = ?`;
-
-        await new Promise((resolve, reject) => {
-            conexao.query(sql, [id_user], (err, results) => {
-                if (err) reject(err);
-                else resolve(results);
-            });
-        });
-
-        res.status(200).json({ message: "Usuário deletado com sucesso" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Erro ao deletar usuário" });
-    }
-});
-
-app.put('/edit_user/:id_user', async (req, res) => {
-    const id_user = Number(req.params.id_user);
-    const { name_user, email_user, password_user, role_user } = req.body;
-
-    try {
-        let hashedPassword = null;
-        if (password_user) {
-            hashedPassword = await bcrypt.hash(password_user, 10);
-        }
-
-        const sql = `
-            UPDATE users
-            SET name_user = ?, email_user = ?, ${hashedPassword ? 'password_user = ?,' : ''} role_user = ?
-            WHERE id_user = ?
-        `;
-
-        const params = [
-            name_user,
-            email_user,
-            ...(hashedPassword ? [hashedPassword] : []),
-            role_user,
-            id_user
-        ];
-
-        await new Promise((resolve, reject) => {
-            conexao.query(sql, params, (err, results) => {
-                if (err) reject(err);
-                else resolve(results);
-            });
-        });
-
-        res.status(200).json({ message: "Usuário atualizado com sucesso" });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
+app.delete('/delete_user/:id_user',handleDeleteUser)
+app.put('/edit_user/:id_user',editUser)
 
 app.get('/filter_users_by_name', async (req, res) => {
-    try {
-        const { name_user } = req.query;
-        const sql = `SELECT * FROM users WHERE name_user LIKE ?`;
-        const params = [`%${name_user}%`];
+  try {
+      const { name_user } = req.query;
+      const sql = `SELECT * FROM users WHERE name_user LIKE ?`;
+      const params = [`%${name_user}%`];
 
-        const result = await new Promise((resolve, reject) => {
-            conexao.query(sql, params, (err, results) => {
-                if (err) reject(err);
-                else resolve(results);
-            });
-        });
+      const [rows] = await conexao.execute(sql, params); // 'rows' já contém os resultados
 
-        res.status(200).json(result);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+      res.status(200).json(rows);
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/login_users', async (req, res) => {
-    const { email_user, password_user } = req.body;
-
-    try {
-        const sql = "SELECT * FROM users WHERE email_user = ?";
-
-        const user = await new Promise((resolve, reject) => {
-            conexao.query(sql, [email_user], (err, results) => {
-                if (err) reject(err);
-                else resolve(results[0]);
-            });
-        });
-
-        if (!user) {
-            return res.status(404).json({ error: "Usuário não encontrado" });
-        }
-
-        const isPasswordValid = await bcrypt.compare(password_user, user.password_user);
-
-        if (!isPasswordValid) {
-            return res.status(401).json({ error: "Senha incorreta" });
-        }
-
-        const token = jwt.sign(
-            {
-                id_user: user.id_user,
-                email_user: user.email_user,
-                role_user: user.role_user
-            },
-            process.env.JWT_SECRET,
-            { expiresIn: '1h' }
-        );
-
-        res.status(200).json({ message: "Login bem-sucedido", token });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 
 app.get('/protected_users', authenticateJWT, (req, res) => {
     if (req.user.role_user !== "user") {
@@ -412,6 +300,8 @@ app.get('/protected_users', authenticateJWT, (req, res) => {
         user: req.user
     });
 });
+
+app.post('/login_users', loginUser)
 app.get('/protected_admin', authenticateJWT, (req, res) => {
     if (req.user.role_user !== "admin") {
         return res.status(403).json({ message: "Acesso negado" });
