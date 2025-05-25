@@ -141,6 +141,7 @@ app.delete('/upload/:id_uploads', async (req, res) => {
         
         console.log(`Arquivo ${filePath} excluído com sucesso do sistema.`);
       });
+      
   
       return res.json({ message: 'Arquivo excluído com sucesso.' });
   
@@ -244,36 +245,40 @@ app.get('/download/:id_uploads', async (req, res) => {
         res.status(500).json({ error: 'Erro ao contar usuários', details: err.message });
     }
 });
-  
   app.get('/list_users', async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 6;
-    const offset = (page - 1) * limit;
-  
-    try {
-      const [countRows] = await conexao.query("SELECT COUNT(*) AS total FROM users");
-      const total = countRows[0].total;
-  
-      const [dataRows] = await conexao.query("SELECT * FROM users LIMIT ? OFFSET ?", [limit, offset]);
-      const lastPage = Math.ceil(total / limit);
-  
-      res.status(200).json({
-        page,
-        perPage: limit,
-        total,
-        lastPage,
-        data: dataRows
-      });
-  
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 6;
+  const offset = (page - 1) * limit;
+
+  try {
+    const [countRows] = await conexao.query("SELECT COUNT(*) AS total FROM users");
+    const total = countRows[0].total;
+
+    const [dataRows] = await conexao.query(
+      "SELECT * FROM users ORDER BY name_user ASC LIMIT ? OFFSET ?",
+      [limit, offset]
+    );
+
+    const lastPage = Math.ceil(total / limit);
+
+    res.status(200).json({
+      page,
+      perPage: limit,
+      total,
+      lastPage,
+      data: dataRows
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
   
 app.post('/create_users', handleCreateUser)
 
 app.delete('/delete_user/:id_user',handleDeleteUser)
-app.put('/edit_user/:id_user',editUser)
+app.put('/edit_user/:id_user',authenticateJWT,editUser)
 
 app.get('/filter_users_by_name', async (req, res) => {
   try {
@@ -302,6 +307,7 @@ app.get('/protected_users', authenticateJWT, (req, res) => {
 });
 
 app.post('/login_users', loginUser)
+
 app.get('/protected_admin', authenticateJWT, (req, res) => {
     if (req.user.role_user !== "admin") {
         return res.status(403).json({ message: "Acesso negado" });
@@ -312,6 +318,46 @@ app.get('/protected_admin', authenticateJWT, (req, res) => {
         message: `Bem-vindo, admin ${req.user.name_user}`,  // Exibindo o nome do admin
         user: req.user
     });
+});
+
+
+app.put('/edit_profile', authenticateJWT, async (req, res) => {
+  const { name_user, email_user, password_user } = req.body;
+  const id_user = req.user.id_user; // Pegado do token JWT
+
+  if (!name_user || !email_user) {
+    return res.status(400).json({ message: 'Nome e email são obrigatórios' });
+  }
+
+  try {
+    const campos = ['name_user = ?', 'email_user = ?'];
+    const params = [name_user, email_user];
+
+    if (password_user && password_user.trim() !== '') {
+      const hashedPassword = await bcrypt.hash(password_user, 10);
+      campos.push('password_user = ?');
+      params.push(hashedPassword);
+    }
+
+    params.push(id_user); // Para o WHERE
+
+    const sql = `
+      UPDATE users
+      SET ${campos.join(', ')}
+      WHERE id_user = ?
+    `;
+
+    const [result] = await conexao.execute(sql, params);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Usuário não encontrado' });
+    }
+
+    res.status(200).json({ message: 'Perfil atualizado com sucesso' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Erro ao atualizar perfil', error: err.message });
+  }
 });
 
 export default app;
