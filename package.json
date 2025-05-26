@@ -8,13 +8,6 @@
     "start": "nodemon src/server.js",
      "dev": "node --watch src/server.js",
      "build": "node ./node_modules/esbuild/bin/esbuild src/server.js --bundle --platform=node --format=esm --minify --external:aws-sdk --external:mock-aws-s3 --external:nock --external:@mapbox/node-pre-gyp --outfile=dist/server.js"
-
-
-    // "build": "node ./node_modules/esbuild/bin/esbuild src/server.js --bundle --platform=node --format=esm --external:aws-sdk --external:mock-aws-s3 --external:nock --external:@mapbox/node-pre-gyp --outfile=dist/server.js"
-
-  
-
-
   },
   "keywords": [],
   "author": "",
