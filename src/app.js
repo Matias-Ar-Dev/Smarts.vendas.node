@@ -5,16 +5,15 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { authenticateJWT } from './middlewares/auth.js';
 import conexao from './app/data/conexao.js';
-import { fileURLToPath } from 'url';
+import fsSync from 'fs';
 import path from 'path';
 import multer from 'multer';
-import fs from 'fs'
+import fs from 'fs/promises';
 import { handleCreateUser } from './app/controllers/userContro.js';
 import { loginUser } from './app/controllers/logincontro.js';
 import { handleDeleteUser } from './app/controllers/deleteuserContro.js';
 import { editUser } from './app/controllers/edituserContro.js';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+
 
 dotenv.config();
 
@@ -25,211 +24,328 @@ app.use(express.json());
 
 
 
-//uploads rotas
+const uploadDir = './uploads'
+if(!fsSync.existsSync(uploadDir))fsSync.mkdirSync(uploadDir, {recursive: true});
+
+
+// Configuração do Multer com validação de tipo
 const storage = multer.diskStorage({
-    destination:(req, file, cb) => {
-        const baseDir = 'uploads';
-        let subFolder = '';
-        const ext = path.extname(file.originalname).toLowerCase()
-        if (ext === '.png') {
-            subFolder = 'pngFiles';
-          } else if (ext === '.pdf') {
-            subFolder = 'pdfFiles';
-          } else if (ext === '.jpg' || ext === '.jpeg') {
-            subFolder = 'jpgFiles';
-          } else {
-            subFolder = 'otherFiles';
-          }
-          const uploadDir = path.join(__dirname, baseDir, subFolder);
-          fs.mkdirSync(uploadDir, {recursive: true});
-          cb(null, uploadDir);
-    },
-    filename:(req, file, cb) => {
-        const filename = Date.now()+ '_'+file.originalname;
-        cb(null, filename);
-    }
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
-const upload = multer({storage});
 
-app.post('/upload', upload.array('arquivo', 10), async (req, res) => {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ message: 'Nenhum arquivo enviado' });
+const upload = multer({ 
+  storage,
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'application/pdf',
+      'image/jpeg',
+      'image/png',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Tipo de arquivo não suportado.'), false);
     }
+  }
+});
+
+
+
+app.post('/documentos', upload.single('arquivo'), async (req, res) => {
+  const { name_document, role_document } = req.body;
+  const file = req.file;
+
+  if (!file) return res.status(400).json({ error: 'Arquivo é obrigatório.' });
+  if (!name_document) return res.status(400).json({ error: 'Nome do documento é obrigatório.' });
+  if (!role_document) return res.status(400).json({ error: 'Tipo (cliente/empresa) é obrigatório.' });
+
+  const path_document = file.path;
+  const document_size = file.size;
+
+  try {
+    const [result] = await conexao.execute(`
+      INSERT INTO documents (name_document, path_document, role_document, document_size)
+      VALUES (?, ?, ?, ?)
+    `, [name_document, path_document, role_document, document_size]);
+
+    // Buscar o documento recém inserido (assumindo que id_document é autoincrement)
+    const [rows] = await conexao.execute(`SELECT * FROM documents WHERE id_document = ?`, [result.insertId]);
+
+    res.status(201).json({ message: 'Documento salvo com sucesso!', document: rows[0] });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: 'Já existe um documento com esse nome.' });
+    }
+    console.error(error);
+    res.status(500).json({ error: error.message || 'Erro ao salvar no banco de dados.' });
+  }
+});
+app.get('/documentos', async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 6;
+  const offset = (page - 1) * limit;
+
+  try {
+    // Conta total de documentos
+    const [countRows] = await conexao.execute("SELECT COUNT(*) AS total FROM documents");
+    const total = countRows[0].total;
+
+    // Busca paginada e ordenada por data de criação
+    const [dataRows] = await conexao.execute(
+      `SELECT 
+         id_document, 
+         name_document, 
+         path_document, 
+         role_document, 
+         document_size, 
+         data_create 
+       FROM documents 
+       ORDER BY data_create DESC 
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+
+    const lastPage = Math.ceil(total / limit);
+
+    res.status(200).json({
+      page,
+      perPage: limit,
+      total,
+      lastPage,
+      data: dataRows
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Erro ao buscar documentos' });
+  }
+});
+
   
-    try {
-      const insertPromises = req.files.map(file => {
-        // Verificar se todas as propriedades estão definidas
-        const { originalname, filename, mimetype, path: filePath } = file;
-  
-        // Adicionar verificações para evitar undefined
-        if (!originalname || !filename || !mimetype || !filePath) {
-          console.error('Propriedade faltando no arquivo:', file);
-          return res.status(400).json({ message: 'Alguns dados do arquivo estão faltando' });
+
+
+// ❌ Excluir documento
+app.delete('/documentos/:id_document', async (req, res) => {
+  const { id_document } = req.params;
+
+  try {
+    // 1. Buscar o documento
+    const [rows] = await conexao.execute(
+      'SELECT path_document FROM documents WHERE id_document = ?',
+      [id_document]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Documento não encontrado.' });
+    }
+
+    const { path_document } = rows[0];
+
+    // 2. Excluir arquivo físico (se existir)
+    await fs.unlink(path_document).catch(() => {
+      console.warn('Arquivo não encontrado no disco. Prosseguindo com exclusão do banco.');
+    });
+
+    // 3. Excluir do banco
+    await conexao.execute(
+      'DELETE FROM documents WHERE id_document = ?',
+      [id_document]
+    );
+
+    res.json({ message: 'Documento excluído com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao excluir documento:', error);
+    res.status(500).json({ error: 'Erro ao excluir o documento.' });
+  }
+});
+
+
+app.get('/documentos/download/:id_document', async (req, res) => {
+  const { id_document } = req.params;
+
+  try {
+    // Busca o documento no banco para pegar o caminho e nome
+    const [rows] = await conexao.execute(
+      'SELECT path_document, name_document FROM documents WHERE id_document = ?',
+      [id_document]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Documento não encontrado.' });
+    }
+
+    const { path_document, name_document } = rows[0];
+
+    // Envia o arquivo para download
+    res.download(path_document, name_document, (err) => {
+      if (err) {
+        console.error('Erro ao enviar arquivo:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Erro ao enviar arquivo.' });
         }
-  
-        // Inserir no banco
-        return conexao.execute(
-          `INSERT INTO uploads (original_name, stored_name, file_path, mime_type) VALUES (?, ?, ?, ?)`,
-          [originalname, filename, filePath, mimetype]
-        );
+      }
+    });
+
+  } catch (error) {
+    console.error('Erro na rota de download:', error);
+    res.status(500).json({ error: 'Erro interno no servidor.' });
+  }
+});
+
+
+app.put('/documentos/:id_document', upload.single('arquivo'), async (req, res) => {
+  const { id_document } = req.params;
+  const { name_document, role_document } = req.body;
+  const file = req.file;
+
+  try {
+    // 1. Busca o documento atual no banco
+    const [rows] = await conexao.execute(
+      'SELECT path_document FROM documents WHERE id_document = ?',
+      [id_document]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Documento não encontrado.' });
+    }
+
+    const currentPath = rows[0].path_document;
+
+    // 2. Definir novos valores
+    // Se não enviar novo nome ou role, mantém os antigos
+    // Se quiser forçar, pode validar aqui antes de atualizar
+
+    // 3. Se enviou novo arquivo, apagar o antigo arquivo físico e atualizar path e size
+    let path_document = currentPath;
+    let document_size = null;
+
+    if (file) {
+      // Apaga arquivo antigo
+      await fs.unlink(currentPath).catch(() => {
+        console.warn('Arquivo antigo não encontrado no disco, prosseguindo.');
       });
-  
-      await Promise.all(insertPromises);
-      return res.json({ message: 'Arquivos salvos com sucesso' });
-    } catch (err) {
-      console.error('Erro ao salvar no banco:', err);
-      return res.status(500).json({ message: 'Erro ao salvar no banco', erro: err.message });
-    }
-  });
 
-  app.put('/upload/:id_uploads', async (req, res) => {
-    const { id_uploads } = req.params;  // Obtém o ID do arquivo a ser editado
-    const { originalname, mimetype } = req.body;  // Obtém os novos dados para atualização
-  
-    // Verificar se o ID foi fornecido e se os dados necessários estão presentes
-    if (!originalname || !mimetype) {
-      return res.status(400).json({ message: 'Nome do arquivo e tipo MIME são obrigatórios' });
+      path_document = file.path;
+      document_size = file.size;
     }
-  
-    try {
-      // Executar o comando de atualização no banco de dados
-      const [result] = await conexao.execute(
-        `UPDATE uploads SET original_name = ?, mime_type = ? WHERE id_uploads = ?`,
-        [originalname, mimetype, id_uploads]  // Passar os parâmetros de forma segura
-      );
-  
-      // Verificar se o arquivo foi encontrado e atualizado
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: 'Arquivo não encontrado para atualização' });
-      }
-  
-      return res.json({ message: 'Arquivo atualizado com sucesso' });
-    } catch (err) {
-      console.error('Erro ao atualizar no banco:', err);
-      return res.status(500).json({ message: 'Erro ao atualizar no banco', erro: err.message });
+
+    // 4. Montar query e params dinamicamente
+    const fields = [];
+    const params = [];
+
+    if (name_document) {
+      fields.push('name_document = ?');
+      params.push(name_document);
     }
-  });
-  
-  
-app.delete('/upload/:id_uploads', async (req, res) => {
-    const { id_uploads } = req.params;
-  
-    try {
-      // Primeiro, busca o caminho do arquivo pelo ID
-      const [rows] = await conexao.execute('SELECT file_path FROM uploads WHERE id_uploads = ?', [id_uploads]);
-  
-      if (rows.length === 0) {
-        return res.status(404).json({ message: 'Arquivo não encontrado.' });
-      }
-  
-      const filePath = rows[0].file_path;  // Certifique-se de que é 'file_path' e não 'filepath'
-  
-      // Verifica se o caminho do arquivo realmente existe
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ message: 'Arquivo não encontrado no sistema de arquivos.' });
-      }
-  
-      // Exclui o registro do banco de dados
-      await conexao.execute('DELETE FROM uploads WHERE id_uploads = ?', [id_uploads]);
-  
-      // Tenta excluir o arquivo fisicamente
-      fs.unlink(filePath, (err) => {
-        if (err) {
-          console.error('Erro ao tentar excluir o arquivo no sistema:', err);
-          return res.status(500).json({ message: 'Erro ao excluir o arquivo do sistema.' });
-        }
-        
-        console.log(`Arquivo ${filePath} excluído com sucesso do sistema.`);
-      });
-      
-  
-      return res.json({ message: 'Arquivo excluído com sucesso.' });
-  
-    } catch (error) {
-      console.error('Erro ao excluir arquivo:', error);
-      return res.status(500).json({ message: 'Erro ao excluir o arquivo.' });
+
+    if (role_document) {
+      fields.push('role_document = ?');
+      params.push(role_document);
     }
-  });
+
+    if (file) {
+      fields.push('path_document = ?');
+      params.push(path_document);
+
+      fields.push('document_size = ?');
+      params.push(document_size);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'Nenhum dado para atualizar.' });
+    }
+
+    params.push(id_document);
+
+    const sql = `UPDATE documents SET ${fields.join(', ')} WHERE id_document = ?`;
+
+    await conexao.execute(sql, params);
+
+    res.json({ message: 'Documento atualizado com sucesso.' });
+
+  } catch (error) {
+    console.error('Erro ao atualizar documento:', error);
+    res.status(500).json({ error: 'Erro ao atualizar documento.' });
+  }
+});
+
+
+app.get('/filter_documentos', async (req, res) => {
+  const name_document = req.query.name_document?.trim(); // já remove espaços
+
+  console.log('Filtro name_document:', name_document); // para debug
+
+  try {
+    let sql = `
+      SELECT 
+        id_document, 
+        name_document, 
+        path_document, 
+        role_document, 
+        document_size, 
+        data_create 
+      FROM documents
+    `;
+
+    const params = [];
+
+    // SOMENTE adiciona o filtro se o valor existir e for string
+    if (name_document && name_document.length > 0) {
+      sql += ' WHERE LOWER(name_document) LIKE ?';
+      params.push(`%${name_document.toLowerCase()}%`);
+    }
+
+    sql += ' ORDER BY data_create DESC';
+
+    console.log('SQL Final:', sql);
+    console.log('Parâmetros:', params);
+
+    const [rows] = await conexao.execute(sql, params);
+
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error('Erro ao buscar documentos:', error);
+    res.status(500).json({ error: 'Erro ao buscar documentos.' });
+  }
+});
+
+app.get('/total_por_categoria', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        role_document AS categoria,
+        COUNT(*) AS total
+      FROM documents
+      GROUP BY role_document
+    `;
+
+    const [rows] = await conexao.execute(sql);
+
+    res.status(200).json(rows); // Ex: [{ categoria: "cliente", total: 8 }, { categoria: "empresa", total: 12 }]
+  } catch (error) {
+    console.error('Erro ao contar documentos por categoria:', error);
+    res.status(500).json({ error: 'Erro ao contar documentos por categoria.' });
+  }
+});
+
+
+app.get('/total_documentos', async (req, res) => {
+  try {
+    const [rows] = await conexao.execute('SELECT COUNT(*) AS total FROM documents');
+    const total = rows[0]?.total || 0;
+
+    res.status(200).json({ total });
+  } catch (error) {
+    console.error('Erro ao obter total de documentos:', error);
+    res.status(500).json({ error: 'Erro ao obter total de documentos.' });
+  }
+});
+
 
   
-
-  app.get('/upload/:id_uploads', async (req, res) => {
-    const { id_uploads } = req.params;
   
-    try {
-      const [rows] = await conexao.execute('SELECT * FROM uploads WHERE id_uploads = ?', [id_uploads]);
-  
-      if (rows.length === 0) {
-        return res.status(404).json({ message: 'Arquivo não encontrado.' });
-      }
-  
-      return res.json(rows[0]);
-    } catch (error) {
-      console.error('Erro ao buscar arquivo:', error);
-      return res.status(500).json({ message: 'Erro ao buscar o arquivo.' });
-    }
-  });
-
-  app.get('/uploads', async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 6;
-    const offset = (page - 1) * limit;
-  
-    try {
-      // Conta total de uploads
-      const [countRows] = await conexao.execute("SELECT COUNT(*) AS total FROM uploads");
-      const total = countRows[0].total;
-  
-      // Busca paginada e ordenada
-      const [dataRows] = await conexao.execute(
-        "SELECT * FROM uploads ORDER BY upload_date DESC LIMIT ? OFFSET ?",
-        [limit, offset]
-      );
-  
-      const lastPage = Math.ceil(total / limit);
-  
-      res.status(200).json({
-        page,
-        perPage: limit,
-        total,
-        lastPage,
-        data: dataRows
-      });
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: 'Erro ao buscar arquivos' });
-    }
-  });
-  
-  
-app.get('/download/:id_uploads', async (req, res) => {
-    const { id_uploads } = req.params;
-  
-    try {
-      // Busca o caminho e nome original do arquivo
-      const [rows] = await conexao.execute(
-        'SELECT file_path, original_name FROM uploads WHERE id_uploads = ?',
-        [id_uploads]
-      );
-  
-      if (rows.length === 0) {
-        return res.status(404).json({ message: 'Arquivo não encontrado no banco.' });
-      }
-  
-      const { file_path, original_name } = rows[0];
-  
-      // Verifica se o arquivo existe fisicamente
-      if (!fs.existsSync(file_path)) {
-        return res.status(404).json({ message: 'Arquivo não encontrado no disco.' });
-      }
-  
-      // Envia o arquivo com o nome original
-      return res.download(file_path, original_name);
-    } catch (error) {
-      console.error('Erro ao baixar arquivo:', error);
-      return res.status(500).json({ message: 'Erro ao processar o download.' });
-    }
-  });
   
   app.get('/count_users', async (req, res) => {
     const countQuery = "SELECT COUNT(*) AS total FROM users";
@@ -279,20 +395,25 @@ app.post('/create_users', handleCreateUser)
 
 app.delete('/delete_user/:id_user',handleDeleteUser)
 app.put('/edit_user/:id_user',authenticateJWT,editUser)
-
-app.get('/filter_users_by_name', async (req, res) => {
++
+app.get('/filter_users', async (req, res) => {
   try {
-      const { name_user } = req.query;
-      const sql = `SELECT * FROM users WHERE name_user LIKE ?`;
-      const params = [`%${name_user}%`];
+    const { search } = req.query;
 
-      const [rows] = await conexao.execute(sql, params); // 'rows' já contém os resultados
+    const sql = `
+      SELECT * FROM users
+      WHERE name_user LIKE ? OR email_user LIKE ?
+    `;
+    const params = [`%${search}%`, `%${search}%`];
 
-      res.status(200).json(rows);
+    const [rows] = await conexao.execute(sql, params);
+
+    res.status(200).json(rows);
   } catch (err) {
-      res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
+
 
 
 app.get('/protected_users', authenticateJWT, (req, res) => {

@@ -9,6 +9,7 @@ export async function updateUser(id_user, data) {
       UPDATE users
       SET name_user = ?, email_user = ?, password_user = ?, role_user = ?
       WHERE id_user = ?
+    
     `;
     params = [name_user, email_user, password_user, role_user, id_user];
   } else {
