@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { updateUser } from '../repos/edituserRepos.js';
 
 export async function editUser(req, res) {

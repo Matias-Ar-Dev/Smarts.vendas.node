@@ -1,5 +1,6 @@
 // src/controllers/userController.js
-import bcrypt from 'bcrypt';
+
+import bcrypt from 'bcryptjs';
 import { createUser } from '../repos/userRepos.js';
 
 
