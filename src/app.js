@@ -1,12 +1,13 @@
 import express from 'express';
-import bcrypt from 'bcrypt';
+
+import bcrypt from 'bcryptjs';
+
 import cors from 'cors';
-import jwt from 'jsonwebtoken';
+
 import dotenv from 'dotenv';
 import { authenticateJWT } from './middlewares/auth.js';
 import conexao from './app/data/conexao.js';
 import fsSync from 'fs';
-import path from 'path';
 import multer from 'multer';
 import fs from 'fs/promises';
 import { handleCreateUser } from './app/controllers/userContro.js';
