@@ -82,33 +82,30 @@ app.post('/documentos', upload.single('arquivo'), async (req, res) => {
     console.error(error);
     res.status(500).json({ error: error.message || 'Erro ao salvar no banco de dados.' });
   }
-});
-app.get('/documentos', async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 6;
+});app.get('/documentos', async (req, res) => {
+  const limit = Math.max(1, parseInt(req.query.limit) || 6);
+  const page = Math.max(1, parseInt(req.query.page) || 1);
   const offset = (page - 1) * limit;
 
   try {
-    // Conta total de documentos
     const [countRows] = await conexao.execute("SELECT COUNT(*) AS total FROM documents");
     const total = countRows[0].total;
-
-    // Busca paginada e ordenada por data de criação
-    const [dataRows] = await conexao.execute(
-      `SELECT 
-         id_document, 
-         name_document, 
-         path_document, 
-         role_document, 
-         document_size, 
-         data_create 
-       FROM documents 
-       ORDER BY data_create DESC 
-       LIMIT ? OFFSET ?`,
-      [limit, offset]
-    );
-
     const lastPage = Math.ceil(total / limit);
+
+    const sql = `
+      SELECT 
+        id_document, 
+        name_document, 
+        path_document, 
+        role_document, 
+        document_size, 
+        data_create 
+      FROM documents 
+      ORDER BY data_create DESC 
+      LIMIT ${Number(limit)} OFFSET ${Number(offset)}
+    `;
+
+    const [dataRows] = await conexao.query(sql);
 
     res.status(200).json({
       page,
@@ -122,6 +119,7 @@ app.get('/documentos', async (req, res) => {
     res.status(500).json({ message: 'Erro ao buscar documentos' });
   }
 });
+
 
   
 
@@ -480,5 +478,7 @@ app.put('/edit_profile', authenticateJWT, async (req, res) => {
     res.status(500).json({ message: 'Erro ao atualizar perfil', error: err.message });
   }
 });
+
+
 
 export default app;
